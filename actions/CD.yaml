@@ -1,0 +1,90 @@
+name: Build and Publish Docker Image to GitHub Container Registry
+
+on:
+  push:
+    branches:
+      - staging
+      - main
+  workflow_dispatch:
+
+jobs:
+  CI-develop:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Convert repository name to lowercase
+        id: repo-name
+        run: echo "repo_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Display Run Number
+        run: echo ${{ github.run_number }}
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ env.repo_name }}:develop${{ github.run_number }}
+
+      - name: Logout from GitHub Container Registry
+        run: docker logout ghcr.io
+
+  CI-staging:
+    if: github.ref == 'refs/heads/staging'
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Convert repository name to lowercase
+        id: repo-name
+        run: echo "repo_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: | 
+            ghcr.io/${{ env.repo_name }}:staging${{ github.run_number }}
+
+  CD:
+    runs-on: self-hosted
+    needs: CI-staging
+    steps:
+      - name: Set git repo
+        run: |
+          git config --global user.name ${{ github.git_user }}
+          git config --global user.email ${{ github.git_email  }}
+      - run: |
+          git clone https://x-access-token:${{ secrets.TOKEN }}@github.com/your_devops_repo.git
+          ls
+      - name: Update values.yaml
+        run: |
+          sed -i 's|repository:.*|repository: ghcr.io/your_repo:staging${{ github.run_number }}|' your_char_path/values.yaml
+          cd devops
+          git add  your_char_path/values.yaml
+          git commit -a "change yaml value"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
